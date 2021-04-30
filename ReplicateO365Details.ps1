@@ -27,16 +27,12 @@ param()
 #*=============================================================================
 
 #*=============================================================================
-#* INITIALISE VARIABLES
+#* INITIALISE VARIABLES and Classes
 #*=============================================================================
 # Increase buffer width/height to avoid PowerShell from wrapping the text before
 # sending it back to PHP (this results in weird spaces).
-$pshost = Get-Host
-$pswindow = $pshost.ui.rawui
-$newsize = $pswindow.buffersize
-$newsize.height = 3000
-$newsize.width = 400
-$pswindow.buffersize = $newsize
+
+. D:\Scripts\MyClasses.ps1
 
 #*=============================================================================
 #* EXCEPTION HANDLER
@@ -77,15 +73,35 @@ D:\scripts\MySQL.ps1 -Query $sql7
 D:\scripts\MySQL.ps1 -Query $sql11
 D:\scripts\MySQL.ps1 -Query $sql12
 
-# Connect to O365
+##############################################################
+#  Connect to O365
+##############################################################
 
-$SysReport = ([string]("78,116,120,101,110,49,49,54,49".Split(",") | % { [char][Int]$_ })).Replace(" ", "") | ConvertTo-SecureString -AsPlainText -Force
-$UPN = "svc.ul.O365@ul.onmicrosoft.com"
-$O365Cred = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $UPN, $SysReport
-$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://ps.outlook.com/powershell/ -Credential $O365Cred -Authentication Basic -AllowRedirection
-Import-PSsession $Session
+$PSSession = New-Object -TypeName O365
+$PSSession.Connect()
 
+##############################################################
+#  Fetch DL Groups
+##############################################################
+
+Write-Host "Fetching Distribution Groups ..." -ForegroundColor Cyan
 $dlgroups = Get-DistributionGroup -ResultSize Unlimited
+
+if ($?)
+{
+    Write-Host "Done. Found " $dlgroups.Count " Groups ..." -ForegroundColor Green
+}
+else
+{
+    Write-Host "Couldn't fetch Groups. Something went wrong. Fix the issue and try it again" -ForegroundColor Red
+    Break
+}
+
+##############################################################
+#  Prepare Data for SQL DB
+##############################################################
+
+Write-Host "Preparing fetched Datas for SQL DB ..." -ForegroundColor Cyan
 
 foreach ($dlgroup in $dlgroups)
 {
@@ -107,11 +123,26 @@ foreach ($dlgroup in $dlgroups)
     {
         $notes = $notes.Replace("'", "\'")
     }
-    $nomembers = (Get-DistributionGroupMember -ResultSize Unlimited $DisplayName).Count
-    if (!$nomembers)
-    {
-        $nomembers = 1
-    }
+
+    ##############################################################
+    #  Fetching Group Members from O365
+    ##############################################################
+
+    # Write-Host "Fetchiing Grooup Members from O365 ..." -ForegroundColor Cyan
+    # 
+    # $nomembers = (Get-DistributionGroupMember -ResultSize Unlimited $DisplayName).Count
+    # if (!$nomembers)
+    # {
+    #     $nomembers = 1
+    # }
+
+    ##############################################################
+    #  Store collected datas in SQL Temp DB
+    ##############################################################
+
+    $nomembers = 1
+
+    Write-Host "Store collected datas in SQL Temp DB" -ForegroundColor Cyan
     $sql3 = "INSERT INTO distributiongroup_temp (DisplayName, Name, UseRestricted, LastChanged, DLType, Notes, nomembers, dynamicgroup) VALUES ('$displayname', '$name', '$userestricted' , '$lastchanged', '$type', '$notes', '$nomembers', '0')"
     D:\scripts\MySQL.ps1 -Query $sql3
 
@@ -137,6 +168,12 @@ foreach ($dlgroup in $dlgroups)
 
 }
 
+##############################################################
+#  Fetch dynamic groups from O365
+##############################################################
+
+Write-Host "Fetch dynamic groups from O365..." -ForegroundColor Cyan
+
 $dlgroupsdyn = Get-DynamicDistributionGroup -ResultSize Unlimited
 
 foreach ($dlgroupdyn in $dlgroupsdyn)
@@ -160,13 +197,28 @@ foreach ($dlgroupdyn in $dlgroupsdyn)
         $notes = $notes.Replace("'", "\'")
     }
 
-    $members = Get-DynamicDistributionGroup $displayname
+    ##############################################################
+    #  Fetch dynamic groups Members from O365
+    ##############################################################
+    
+    # Write-Host "Fetch dynamic groups Members from O365 ..." -ForegroundColor Cyan
+    # 
+    # $members = Get-DynamicDistributionGroup $displayname
+    # 
+    # $nomembers = (Get-Recipient -ResultSize Unlimited -RecipientPreviewFilter $members.RecipientFilter -OrganizationalUnit $members.RecipientContainer).Count
+    # if (!$nomembers)
+    # {
+    #     $nomembers = 1
+    # }
+    
+    $nomembersembers = 1
 
-    $nomembers = (Get-Recipient -ResultSize Unlimited -RecipientPreviewFilter $members.RecipientFilter -OrganizationalUnit $members.RecipientContainer).Count
-    if (!$nomembers)
-    {
-        $nomembers = 1
-    }
+    ##############################################################
+    #  Store Dynamic Group Details in SQL Temp DB
+    ##############################################################
+    
+    Write-Host "Store Dynamic Group Details in SQL Temp DB" -ForegroundColor Cyan
+    
     $sql15 = "INSERT INTO distributiongroup_temp (DisplayName, Name, UseRestricted, LastChanged, DLType, Notes, nomembers, dynamicgroup) VALUES ('$displayname', '$name', '$userestricted' , '$lastchanged', '$type', '$notes', '$nomembers', '1')"
     D:\scripts\MySQL.ps1 -Query $sql15
 
@@ -192,6 +244,12 @@ foreach ($dlgroupdyn in $dlgroupsdyn)
 
 }
 
+##############################################################
+#  Update production DBs with content from TempDBs...
+##############################################################
+
+Write-Host "Update production DBs with content from TempDBs" -ForegroundColor Cyan
+
 $sql4 = "INSERT INTO sfbhelper.distributiongroup (DisplayName, Name, UseRestricted, LastChanged, DLType, Notes, nomembers, dynamicgroup)(
             SELECT sfbhelper.distributiongroup_temp.DisplayName, sfbhelper.distributiongroup_temp.Name, sfbhelper.distributiongroup_temp.UseRestricted, sfbhelper.distributiongroup_temp.LastChanged, sfbhelper.distributiongroup_temp.DLType, sfbhelper.distributiongroup_temp.Notes, sfbhelper.distributiongroup_temp.nomembers, sfbhelper.distributiongroup_temp.dynamicgroup
             FROM sfbhelper.distributiongroup_temp
@@ -201,28 +259,40 @@ $sql4 = "INSERT INTO sfbhelper.distributiongroup (DisplayName, Name, UseRestrict
 
 D:\scripts\MySQL.ps1 -Query $sql4
 
-$sql18 = "UPDATE sfbhelper.distributiongroup
-    INNER JOIN sfbhelper.distributiongroup_temp
-    ON sfbhelper.distributiongroup.DisplayName = sfbhelper.distributiongroup_temp.DisplayName
-SET sfbhelper.distributiongroup.Name = sfbhelper.distributiongroup_temp.Name,
-    sfbhelper.distributiongroup.UseRestricted = sfbhelper.distributiongroup_temp.UseRestricted,
-    sfbhelper.distributiongroup.LastChanged = sfbhelper.distributiongroup_temp.LastChanged,
-    sfbhelper.distributiongroup.DLType = sfbhelper.distributiongroup_temp.DLType,
-    sfbhelper.distributiongroup.Notes = sfbhelper.distributiongroup_temp.Notes,
-    sfbhelper.distributiongroup.nomembers = sfbhelper.distributiongroup_temp.nomembers,
-    sfbhelper.distributiongroup.nomembers = sfbhelper.distributiongroup_temp.dynamicgroup
-WHERE distributiongroup.DisplayName"
+# $sql18 = "UPDATE sfbhelper.distributiongroup
+#     INNER JOIN sfbhelper.distributiongroup_temp
+#     ON sfbhelper.distributiongroup.DisplayName = sfbhelper.distributiongroup_temp.DisplayName
+# SET sfbhelper.distributiongroup.Name = sfbhelper.distributiongroup_temp.Name,
+#     sfbhelper.distributiongroup.UseRestricted = sfbhelper.distributiongroup_temp.UseRestricted,
+#     sfbhelper.distributiongroup.LastChanged = sfbhelper.distributiongroup_temp.LastChanged,
+#     sfbhelper.distributiongroup.DLType = sfbhelper.distributiongroup_temp.DLType,
+#     sfbhelper.distributiongroup.Notes = sfbhelper.distributiongroup_temp.Notes,
+#     sfbhelper.distributiongroup.nomembers = sfbhelper.distributiongroup_temp.nomembers,
+#     sfbhelper.distributiongroup.nomembers = sfbhelper.distributiongroup_temp.dynamicgroup
+# WHERE distributiongroup.DisplayName"
+# 
+# D:\scripts\MySQL.ps1 -Query $sql18
+# 
+# $sql5 = "DELETE FROM sfbhelper.distributiongroup
+#         WHERE NOT EXISTS (
+#         SELECT *
+#         FROM sfbhelper.distributiongroup_temp
+#         WHERE sfbhelper.distributiongroup_temp.DisplayName = sfbhelper.distributiongroup.DisplayName
+#     )"
+# 
+# D:\scripts\MySQL.ps1 -Query $sql5
 
-D:\scripts\MySQL.ps1 -Query $sql18
-
-$sql5 = "DELETE FROM sfbhelper.distributiongroup
-        WHERE NOT EXISTS (
-        SELECT *
-        FROM sfbhelper.distributiongroup_temp
-        WHERE sfbhelper.distributiongroup_temp.DisplayName = sfbhelper.distributiongroup.DisplayName
-    )"
-
+$sql4 = "DELETE FROM distributiongroup"
+$sql5 = "ALTER TABLE distributiongroup AUTO_INCREMENT=1"
+D:\scripts\MySQL.ps1 -Query $sql4
 D:\scripts\MySQL.ps1 -Query $sql5
+
+# Copy Temp Table into Production Table
+
+$sql6 = "INSERT INTO sfbhelper.distributiongroup SELECT * from sfbhelper.distributiongroup_temp"
+D:\scripts\MySQL.ps1 -Query $sql6
+
+
 
 $sql9 = "INSERT INTO sfbhelper.dgrp_managers (GrpName, Manager)(
     SELECT sfbhelper.dgrp_managers_temp.GrpName, sfbhelper.dgrp_managers_temp.Manager
@@ -262,7 +332,6 @@ D:\scripts\MySQL.ps1 -Query $sql14
 
 Get-PSSession | Remove-PSSession
 
-# Write them out into a table with the columns you desire:
 
 
 #*=============================================================================
