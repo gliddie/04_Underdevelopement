@@ -20,12 +20,12 @@ class O365
     {
         $me = whoami
         $dir = "C:\Data\Scripts\"
-        $File = "my" + ($me.Substring(($me.IndexOf("\")+1),$me.length-($me.IndexOf("\")+1))).replace(".","") + "File.xml"
+        $File = "my" + ($me.Substring(($me.IndexOf("\") + 1), $me.length - ($me.IndexOf("\") + 1))).replace(".", "") + "File.xml"
         $moveCredFile = "c:\temp\" + $File
         $CredFile = $dir + $File
         If (Test-Path $moveCredFile)
         {
-        	move-item $moveCredFile -destination $CredFile
+            move-item $moveCredFile -destination $CredFile
         }
 
         $Session = get-PSSession
@@ -39,10 +39,10 @@ class O365
             }
         
             $LiveCred = Import-Clixml $CredFile
-        #    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://ps.outlook.com/powershell/ -Credential $Global:LiveCred -Authentication Basic -AllowRedirection
+            #    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://ps.outlook.com/powershell/ -Credential $Global:LiveCred -Authentication Basic -AllowRedirection
         
             Connect-ExchangeOnline -Credential $LiveCred
-        	Add-PSSnapin *Exchange* -erroraction SilentlyContinue
+            Add-PSSnapin *Exchange* -erroraction SilentlyContinue
             Import-Module ActiveDirectory
             Import-Module MSOnline
             Import-Module AzureAD
@@ -53,15 +53,15 @@ class O365
             Connect-MsolService -Credential $LiveCred
             write-host "Connecting to MicrosoftTeams...... " -ForegroundColor Cyan
             Connect-MicrosoftTeams -Credential $LiveCred
-        	write-host "Connecting to AzureAD...... " -ForegroundColor Cyan
+            write-host "Connecting to AzureAD...... " -ForegroundColor Cyan
             Remove-PSSnapin *Exchange*
             Add-PSSnapin *Exchange*	
-        	Connect-AzureAD -Credential $LiveCred | Out-Null
+            Connect-AzureAD -Credential $LiveCred | Out-Null
         }
         else
         {
-        	write-host "Session with Office 365 already exists." -ForegroundColor Yellow
-        	write-host ""
+            write-host "Session with Office 365 already exists." -ForegroundColor Yellow
+            write-host ""
         }
         return $Session
     }
@@ -69,3 +69,4 @@ class O365
     
 
 }
+
