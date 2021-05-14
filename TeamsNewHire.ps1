@@ -1,5 +1,7 @@
 ﻿#### Ask for the EmployeeID ####
+Remove-Variable * -ErrorAction SilentlyContinue
 param( [string] $employeeid = $(Read-Host -prompt "Please enter the EmployeeID"))
+$mypath = $MyInvocation.MyCommand.Path
 cls
 ##########################################
 #                                        #
@@ -37,7 +39,7 @@ function Get-ADUserdetails
 
     Write-Host "Loading Users Details from AD" -ForegroundColor Cyan
 
-    $csaduser = Get-ADObject -Properties * -Filter { (SamAccountName -eq $employeeid ) } | Select-Object UserPrincipalName, DisplayName, UserAccountControl, PhysicalDeliveryOfficeName, Mail
+    $csaduser = Get-ADObject -Properties * -Filter { (SamAccountName -eq $employeeid ) } | Select-Object UserPrincipalName, DisplayName, UserAccountControl, PhysicalDeliveryOfficeName, Mail, givenName
     if (-not ([string]::IsNullOrEmpty($csaduser)))
     {
         $displayname = $csaduser.DisplayName
@@ -61,42 +63,10 @@ function Get-ADUserdetails
     {
         Write-Host "User not founf in AD" -ForegroundColor Red
         Remove-Variable * -ErrorAction SilentlyContinue
-        break
+        # break
+        . $mypath
     }
 }
-
-function Get-SfBHelperOfficeDetails
-{
-
-    #### Look for Office and Settings ####
-        
-    Write-Host ""
-    Write-Host "Loooking for DID Ranges and Policies" -ForegroundColor Cyan
-    $policy = C:\Data\Scripts\MySQL.ps1 -Query "SELECT LocationCode FROM locationconfiguration WHERE Name LIKE '$office'"
-    $policy = $policy.LocationCode
-    if ($policy)
-    {
-        Write-Host "Office found in DB. OfficeCode is: $policy"
-        Write-Host ""
-        Write-Host "Looking for DID Ranges..." -ForegroundColor Cyan
-        
-        $didranges = C:\Data\Scripts\MySQL.ps1 -Query "SELECT DIDSTART,DIDEND,Notes FROM did WHERE (LocationCode LIKE '$policy') AND (SDAP LIKE '1')"
-        
-        if ($didranges)
-        {
-            Write-Host "DID Ranges found ..."        
-            Write-Host ""
-        }
-
-    }
-    else
-    {
-        Write-Host "Office not found in DB." -ForegroundColor Red
-        Remove-Variable * -ErrorAction SilentlyContinue
-    
-    }
-}
-
 
 function Get-NewDIDMenu
 {
@@ -112,160 +82,7 @@ function Get-NewDIDMenu
         $index++
     }
     
-    Write-Host "Q: Press 'Q' to quit."
-}
-
-
-function Get-NewDIDs
-{
-    if ($selection)
-    {
-        Write-Host "Looking for the next available DID in Range ... this can take a while ... Please wait ..."
-        Write-Host ""
-        if ($didranges.DIDSTART.Count -gt '1')
-        {
-            $didstart = $didranges[$selection - 1].DIDSTART
-            $didend = $didranges[$selection - 1].DIDEND
-            $didwork = $didstart - 1
-        }
-        else
-        {
-            $didstart = $didranges.DIDSTART
-            $didwork = $didstart - 1
-            $didend = $didranges.DIDEND
-        }
-    
-        ################ old procedure ##################################################
-        ## do {
-        ##     $didwork++
-        ##     Write-Host "Checking availability from DID = $didwork"
-        ##     $test = C:\Data\Scripts\MySQL.ps1 -Query "SELECT DID FROM endpoints WHERE DID = $didwork"
-        ##     $blockeddids = C:\Data\Scripts\MySQL.ps1 -Query "SELECT did FROM blockeddids WHERE did = $didwork"
-        ## 
-        ## } while ((-not ([string]::IsNullOrEmpty($test))) -or (-not ([string]::IsNullOrEmpty($blockeddids))))
-    
-        ################ new procedure ##################################################
-
-        
-        $number1 = $didstart
-        $number2 = $didend
-        $worknumber = $number1
-        $tabledid = $number1 -replace ".{5}$"
-        $tabledid = $tabledid + '%'
-        $numberrange = @()
-        do
-        {
-        
-            $numberrange += $worknumber
-            $worknumber++
-        } while ($worknumber -le $number2)
-
-        $numberrange = $numberrange | Sort-Object { Get-Random }
-
-        $endpointstable = C:\Data\Scripts\MySQL.ps1 -Query "SELECT DID FROM endpoints WHERE DID LIKE '$tabledid'"
-        $endpointstable += C:\Data\Scripts\MySQL.ps1 -Query "SELECT DID FROM blockeddids WHERE did LIKE '$tabledid'"
-
-        foreach ($number in $numberrange)
-        {
-            $etstatus = ($endpointstable.DID -contains $number)
-            if ($etstatus -eq $false) { break }
-        }
-
-        $didwork = $number
-        
-        if (($didwork) -gt $didend)
-        {
-            Write-Host ""
-            Write-Host "DID Range Exhausted, please choose a different range or order more numbers" -ForegroundColor Yellow
-            $didwork = $null
-        }
-        else
-        {
-
-            $newdid = $didwork
-            Write-Host ""
-            Write-Host "Sugested New DID is: +$newdid" -ForegroundColor Yellow
-            Write-Host ""
-
-            
-        }
-    }
-}
-
-function Set-LineURI
-{
-
-    $lineuri = "tel:+$newdid"
-
-    if ([string]::IsNullOrEmpty($evenabled))
-    {
-        Write-Host "Enabling CsUser for: "$displayname
-        Enable-CsUser $upn -HostingProviderProxyFqdn sipfed.online.lync.com -SipAddress "sip:$sipaddress" -ErrorAction SilentlyContinue
-        Write-Host "Waiting one minute for replication ..." -ForegroundColor Cyan
-        Write-Host "Please be patience ..." -ForegroundColor Cyan
-        Start-Sleep -s 60
-    }
-
-    Write-Host "Setting LineURI for "$displayname" to: +"$newdid" ..."
-    Set-CsUser $upn -LineURI $lineuri -ErrorAction SilentlyContinue
-    if ($?)
-    {
-        Write-Host "Done ..." -ForegroundColor Green
-        $status | Add-Member -MemberType NoteProperty -Name lineuri -Value "yes"
-
-        ### Reserve DID in SfB Helper ###
-
-        C:\Data\Scripts\MySQL.ps1 -Query "INSERT INTO endpoints (DID) VALUE ('$newdid')"
-        
-    }
-    else
-    {
-        Write-Host "User not enabled. Do manually first ..." -ForegroundColor Red
-        $status | Add-Member -MemberType NoteProperty -Name lineuri -Value "no"
-    }
-}
-
-function Connect-O365
-{
-    $me = whoami
-    $dir = "C:\Data\Scripts\"
-    $File = "my" + ($me.Substring(($me.IndexOf("\") + 1), $me.length - ($me.IndexOf("\") + 1))).replace(".", "") + "File.xml"
-    $moveCredFile = "c:\temp\" + $File
-    $Global:CredFile = $dir + $File
-    If (Test-Path $moveCredFile)
-    {
-        move-item $moveCredFile -destination $Global.CredFile
-    }
-    
-    $Session = get-PSSession
-    
-    if ($Session -eq $null)
-    {
-        write-host "Connecting to Office 365....."
-        If ((Test-path $Global:CredFile) -ne "True")
-        {
-            Get-Credential | Export-Clixml $Global:CredFile
-        }
-    
-        $Global:LiveCred = Import-Clixml $Global:CredFile
-    
-        $MSOLSession = Connect-MsolService -Credential $Global:LiveCred
-        $Session = New-CsOnlineSession -credential $Global:LiveCred
-        Import-PSSession $Session
-    
-    }
-    else
-    {
-    
-        write-host "Session with Office 365 already exists." -ForegroundColor Yellow
-        write-host ""
-    }
-    
-    
-    if ($Session -eq $null)
-    {
-        Write-Host "Not connected to O365. Something went wrong" -ForegroundColor Red
-    } 
+    # Write-Host "Q: Press 'Q' to quit."
 }
 
 function Check-IfEVEnabled
@@ -279,7 +96,19 @@ function Check-IfEVEnabled
 #                                        #
 ##########################################
 
+## Load Classes
+
+. C:\data\scripts\MyClasses.ps1
+
+## Begin e new Object
+
+$Teams = New-Object -TypeName Teams
+
+## Check if user is allready EV Enabled.
+
 Check-IfEVEnabled
+
+## Load user settings
 
 if ([string]::IsNullOrEmpty($evenabled.TeamsLineUri))
 {
@@ -289,20 +118,57 @@ else
 {
     $lineuri = $evenabled.TeamsLineUri
     $displayname = $evenabled.DisplayName
+    Write-Host "====================== User Exists ======================"
     Write-Host ""
-    Write-Host "User is allready enabled for EV and or has a Phone Number. Please Check manually" -ForegroundColor Yellow
+    Write-Host "User is allready enabled for EV and or has a Phone Number." -ForegroundColor Yellow
     Write-Host ""
     Write-Host "User: $displayname"
     Write-Host "EmployeeID: $employeeid"
     Write-Host "LineURI: $lineuri"
     Write-Host ""
-    Remove-Variable * -ErrorAction SilentlyContinue
-    break
+    Write-Host "====================== User Exists ======================"
+    Write-Host ""
+    $changenumber = Read-Host "Do you like to change the number? (y/n)."
+    if ($changenumber -eq "n")
+    {
+        # Remove-Variable * -ErrorAction SilentlyContinue
+        # break
+        . $mypath
+    }
 }
 
 if ($office)
 {
-    Get-SfBHelperOfficeDetails
+    Write-Host "================ Choose Office ================"
+    Write-Host ""
+    Write-Host "Location found in AD: $office"
+    Write-Host ""
+    Write-Host "==============================================="
+    Write-Host ""
+
+    $officepicker = Read-Host "Would you like to keep this office? (y/n)"
+    Write-Host ""
+}
+
+if ($officepicker -eq "n")
+{
+    
+    Write-Host ""
+    $officecode = Read-Host "Please enter the 3 letter office code:"
+    Write-Host ""
+    if ($officecode)
+    {
+        $Teams.policy = $officecode
+        $Teams.GetSfBHelperOfficeDetails()
+    }
+}
+
+if ($office)
+{
+    $Teams.office = $office
+    $Teams.GetSfBHelperOfficeDetails()
+    $didranges = $Teams.didranges
+    $office = $Teams.office
 }
 
 if ($didranges)
@@ -315,7 +181,11 @@ if ($didranges)
 
 if ($selection)
 {
-    Get-NewDIDs
+    # Get-NewDIDs
+    $Teams.didranges = $didranges
+    $Teams.selection = $selection
+    $Teams.DidFinder()
+    $didwork = $Teams.newdid
 }
 
 if ($didwork)
@@ -326,8 +196,22 @@ if ($didwork)
     $response = Read-Host -Prompt $msg
     if ($response -eq 'y')
     {
-        Set-LineURI
-        Connect-O365
+        $adobject = Get-ADuser -Properties * -Filter { (SAmAccountName -eq $employeeid) } | Select Mail
+        $sipaddress = "sip:" + $adobject.Mail
+        $lineuri = "tel:+$didwork"
+        Write-Host "Making required changes in AD ..." -ForegroundColor Cyan
+        Set-ADUser $employeeid -Replace @{'msRTCSIP-DeploymentLocator' = "sipfed.online.lync.com" }
+        Set-ADUser $employeeid -Replace @{'msRTCSIP-FederationEnabled' = "TRUE" }
+        Set-ADUser $employeeid -Replace @{'msRTCSIP-InternetAccessEnabled' = "TRUE" }
+        Set-ADUser $employeeid -Replace @{'msRTCSIP-UserEnabled' = "TRUE" }
+        Set-ADUser $employeeid -Replace @{'msRTCSIP-Line' = $lineuri }
+        Set-ADUser $employeeid -Replace @{'msRTCSIP-PrimaryUserAddress' = $sipaddress }
+
+        $Teams.Connect()
+
+        Write-Host "Connecting to Teams ..." -ForegroundColor Cyan
+
+
         $Session = get-PSSession
         if ($Session -eq $null)
         { 
@@ -336,37 +220,7 @@ if ($didwork)
         else
         {
             cls
-            Write-Host "Assigning Phone License ..." -ForegroundColor Cyan
-            Set-MsolUserLicense -UserPrincipalName $upn -AddLicense "ul:MCOEV" -ErrorAction SilentlyContinue
-            if ($?)
-            {
-                Write-Host "License has been assigned successfull" -ForegroundColor Green
-                $status | Add-Member -MemberType NoteProperty -Name license -Value "yes"
-            }
-            else
-            {
-                Write-Host "Checking if user has any Licenses in O365" -ForegroundColor Magenta
-                $license = (Get-MsolUser -UserPrincipalName $upn | Select isLicensed).IsLicensed
-                if ($license -match 'False')
-                {
-                    Write-Host ""
-                    Write-Host "User has no licenses at all." -ForegroundColor Yellow
-                    Write-Host "Some times, our Team is receiving these tasks," -ForegroundColor Yellow
-                    Write-Host "before Service Desk has assigned the licenses." -ForegroundColor Yellow
-                    Write-Host "Please wait a few hours and then try it again." -ForegroundColor Yellow
-                    Write-Host "If it doesnt work by tomorrow," -ForegroundColor Yellow
-                    Write-Host "please contact Sandi Glazebrook. Good Luck ;-)" -ForegroundColor Yellow
-                    Write-Host ""
-                    Get-PSSession | Remove-PSSession
-                    Remove-Variable * -ErrorAction SilentlyContinue
-                    break
-                }
-                else
-                {
-                    Write-Host "Something went wrong. Check manually. (User might allready have the license)" -ForegroundColor Red
-                    $status | Add-Member -MemberType NoteProperty -Name license -Value "no"
-                }
-            }
+            
             Write-Host "Granting Online Voice Routing Policy ..." -ForegroundColor Cyan
             Grant-CsOnlineVoiceRoutingPolicy $upn -PolicyName $policy
             if ($?)
@@ -428,56 +282,52 @@ if ($didwork)
                 $status | Add-Member -MemberType NoteProperty -Name teamsonly -Value "no"
             }
             
-            ### Enable Enterprise Voice and Hosted Voicemail old way ###            
             
-            # Set-CsUser $upn -EnterpriseVoiceEnabled $True -HostedVoiceMail $True -ErrorAction SilentlyContinue
-            # if($?){
-            #     C:\Data\Scripts\MySQL.ps1 -Query "INSERT INTO endpoints (DisplayName,EmployeeID,SipAddress,TeamsLineURI,DID,Type,HostingProvider,CsOnlineVoiceRoutingPolicy,TenantDialPlan,TeamsEnterpriseVoiceEnabled,TeamsHostedVoiceMail,TeamsEmergencyCallingPolicy,TeamsEmergencyCallRoutingPolicy) VALUE ('$displayname','$employeeid','$sipaddress','$lineuri','$newdid','CsUser','sipfed.online.lync.com','$policy','$policy','true','true','$policy','$policy')" 
-            #     Write-Host "enterprisevoice has been enabled" -ForegroundColor Green
-            #     $status | Add-Member -MemberType NoteProperty -Name enterprisevoiceenabled -Value "yes"
-            # } else {
-            #     Set-CsUser $upn -EnterpriseVoiceEnabled $True -HostedVoiceMail $True -ErrorAction SilentlyContinue
-            #     if($?){
-            #         C:\Data\Scripts\MySQL.ps1 -Query "INSERT INTO endpoints (DisplayName,EmployeeID,SipAddress,TeamsLineURI,DID,Type,HostingProvider,CsOnlineVoiceRoutingPolicy,TenantDialPlan,TeamsEnterpriseVoiceEnabled,TeamsHostedVoiceMail,TeamsEmergencyCallingPolicy,TeamsEmergencyCallRoutingPolicy) VALUE ('$displayname','$employeeid','$sipaddress','$lineuri','$newdid','CsUser','sipfed.online.lync.com','$policy','$policy','true','true','$policy','$policy')" 
-            #         Write-Host "enterprisevoice has been enabled" -ForegroundColor Green
-            #         $status | Add-Member -MemberType NoteProperty -Name enterprisevoiceenabled -Value "yes"
-            #     } else {
-            #         C:\Data\Scripts\MySQL.ps1 -Query "INSERT INTO endpoints (DisplayName,EmployeeID,SipAddress,TeamsLineURI,DID,Type,HostingProvider,CsOnlineVoiceRoutingPolicy,TenantDialPlan,TeamsEnterpriseVoiceEnabled,TeamsHostedVoiceMail,TeamsEmergencyCallingPolicy,TeamsEmergencyCallRoutingPolicy) VALUE ('$displayname','$employeeid','$sipaddress','$lineuri','$newdid','CsUser','sipfed.online.lync.com','$policy','$policy','false','false','$policy','$policy')"
-            #         Write-Host "Enterprise voice could not be set to true. Wait one hour and then do it manually" -ForegroundColor Red
-            #         $status | Add-Member -MemberType NoteProperty -Name enterprisevoiceenabled -Value "no"
-            #     }
-            # }
-
-            ### Enable Enterprise Voice and Hosted Voicemail new way ###
-
-            $i = 1
-            do
+                         
+            Set-CsUser $upn -EnterpriseVoiceEnabled $True -HostedVoiceMail $True -ErrorAction SilentlyContinue
+            
+            if ($?)
             {
-                Write-Host "Waiting one minute for replication ..." -ForegroundColor Cyan
-                Write-Host "Please be patience ..." -ForegroundColor Cyan
-                
-                Start-Sleep -s 60
-                
-                Write-Host "Enabling Enterprise Voice and Hosted Voicemail." $i "try of 3"
-                
-                Set-CsUser $upn -EnterpriseVoiceEnabled $True -HostedVoiceMail $True -ErrorAction SilentlyContinue
-                
-                if ($?)
-                {
-                    $i = 10
-                    C:\Data\Scripts\MySQL.ps1 -Query "INSERT INTO endpoints (DisplayName,EmployeeID,SipAddress,TeamsLineURI,DID,Type,HostingProvider,CsOnlineVoiceRoutingPolicy,TenantDialPlan,TeamsEnterpriseVoiceEnabled,TeamsHostedVoiceMail,TeamsEmergencyCallingPolicy,TeamsEmergencyCallRoutingPolicy) VALUE ('$displayname','$employeeid','$sipaddress','$lineuri','$newdid','CsUser','sipfed.online.lync.com','$policy','$policy','true','true','$policy','$policy')" 
-                    Write-Host "enterprisevoice has been enabled" -ForegroundColor Green
-                    $status | Add-Member -MemberType NoteProperty -Name enterprisevoiceenabled -Value "yes"
-                }
-                $i++
-
-            } while ($i -lt '4')
+                C:\Data\Scripts\MySQL.ps1 -Query "INSERT INTO endpoints (DisplayName,EmployeeID,SipAddress,TeamsLineURI,DID,Type,HostingProvider,CsOnlineVoiceRoutingPolicy,TenantDialPlan,TeamsEnterpriseVoiceEnabled,TeamsHostedVoiceMail,TeamsEmergencyCallingPolicy,TeamsEmergencyCallRoutingPolicy) VALUE ('$displayname','$employeeid','$sipaddress','$lineuri','$newdid','CsUser','sipfed.online.lync.com','$policy','$policy','true','true','$policy','$policy')" 
+                Write-Host "enterprisevoice has been enabled" -ForegroundColor Green
+                $status | Add-Member -MemberType NoteProperty -Name enterprisevoiceenabled -Value "yes"
+            }
             
             if ($status.enterprisevoiceenabled -ne "yes")
             {
                 C:\Data\Scripts\MySQL.ps1 -Query "INSERT INTO endpoints (DisplayName,EmployeeID,SipAddress,TeamsLineURI,DID,Type,HostingProvider,CsOnlineVoiceRoutingPolicy,TenantDialPlan,TeamsEnterpriseVoiceEnabled,TeamsHostedVoiceMail,TeamsEmergencyCallingPolicy,TeamsEmergencyCallRoutingPolicy) VALUE ('$displayname','$employeeid','$sipaddress','$lineuri','$newdid','CsUser','sipfed.online.lync.com','$policy','$policy','false','false','$policy','$policy')"
                 Write-Host "Enterprise voice could not be set to true. Wait one hour and then do it manually" -ForegroundColor Red
                 $status | Add-Member -MemberType NoteProperty -Name enterprisevoiceenabled -Value "no"
+            }
+
+            Write-Host "Assigning Phone License ..." -ForegroundColor Cyan
+            Set-MsolUserLicense -UserPrincipalName $upn -AddLicense "ul:MCOEV" -ErrorAction SilentlyContinue
+            if ($?)
+            {
+                Write-Host "License has been assigned successfull" -ForegroundColor Green
+                $status | Add-Member -MemberType NoteProperty -Name license -Value "yes"
+            }
+            else
+            {
+                Write-Host "Checking if user has any Licenses in O365" -ForegroundColor Magenta
+                $license = (Get-MsolUser -UserPrincipalName $upn | Select isLicensed).IsLicensed
+                if ($license -match 'False')
+                {
+                    Write-Host ""
+                    Write-Host "User has no licenses at all." -ForegroundColor Yellow
+                    Write-Host "Please wait a few hours and then try it again." -ForegroundColor Yellow
+                    Write-Host "If it doesnt work by tomorrow," -ForegroundColor Yellow
+                    Write-Host "please assign licemse manualy" -ForegroundColor Yellow
+                    Write-Host ""
+                    # Get-PSSession | Remove-PSSession
+                    Remove-Variable * -ErrorAction SilentlyContinue
+                    break
+                }
+                else
+                {
+                    Write-Host "User was licensed allready" -ForegroundColor Green
+                    $status | Add-Member -MemberType NoteProperty -Name license -Value "yes"
+                }
             }
 
             Clear-Host
@@ -487,11 +337,10 @@ if ($didwork)
             Write-Host ""
             Write-Host "User                         :"$displayname
             Write-Host "EmployeeID                   :"$employeeid
-            Write-Host "DID                          : +$newdid"
+            Write-Host "DID                          : +$didwork"
             Write-Host "License                      :"$status.license
             Write-Host "TenantDialPlan               :"$status.tenantdialplan
             Write-Host "VoiceRoutingPolicy           :"$status.voiceroutingpolicy
-            Write-Host "LineURI                      :"$status.lineuri
             Write-Host "EmergencyCallingPolicy       :"$status.emergencycallingpolicy
             Write-Host "EmergencyCallRoutingPolicy   :"$status.emergencycallroutingpolicy
             Write-Host "EnterpriseVoiceEnabled       :"$status.enterprisevoiceenabled
@@ -499,11 +348,21 @@ if ($didwork)
             Write-Host ""
             Write-Host "==================================================================="
 
-            Get-PSSession | Remove-PSSession
-            Remove-Variable * -ErrorAction SilentlyContinue
+            # Get-PSSession | Remove-PSSession
+            Write-Host ""
+            Write-Host "An Email has been send to the User, to inform him about his new number."
             Write-Host ""
             Write-Host "Work Done. Existing ..."
+
+            $givenname = $csaduser.givenName
+            $body = "Hello $givenname ,</br></br>We have assigned telephone number +$didwork for you and enabled you for Teams Enterprise Voice.</br></br>This allows you to make and receive telephone calls. You also have a Voicemail.</br></br>Kind Regards,</br></br>UL's Unified Communications Team"
+
+            Send-MailMessage -From 'LST.GlobalIPTAdmin@ul.com' -To $csaduser.Mail -Subject 'You have been enabled for Skype For Business Enterprise Voice' -Body $body -BodyAsHtml -SmtpServer 'smtp-relay.ul.com'
+            # Remove-Variable * -ErrorAction SilentlyContinue
+            . $mypath
+
         }
     }
+    . $mypath
     
 }
